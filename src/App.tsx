@@ -299,8 +299,29 @@ export default function App() {
     setIncomeByCategory(data);
   };
 
-  const exportToExcel = (data: any[], fileName: string) => {
-    const worksheet = XLSX.utils.json_to_sheet(data);
+  const exportToExcel = (data: any[], fileName: string, title?: string) => {
+    const workbook = XLSX.utils.book_new();
+    let worksheet: XLSX.WorkSheet;
+
+    if (title) {
+      // Create worksheet with title and empty row
+      worksheet = XLSX.utils.aoa_to_sheet([[title.toUpperCase()], []]);
+      // Add the data starting from the 3rd row
+      XLSX.utils.sheet_add_json(worksheet, data, { origin: 'A3' });
+      
+      // Merge title cells across all columns
+      const numCols = Object.keys(data[0] || {}).length;
+      if (numCols > 0) {
+        if (!worksheet['!merges']) worksheet['!merges'] = [];
+        worksheet['!merges'].push({ s: { r: 0, c: 0 }, e: { r: 0, c: numCols - 1 } });
+      }
+      // Freeze the header row (which is now row 3)
+      worksheet['!freeze'] = { xSplit: 0, ySplit: 3 };
+    } else {
+      worksheet = XLSX.utils.json_to_sheet(data);
+      // Freeze the first row
+      worksheet['!freeze'] = { xSplit: 0, ySplit: 1 };
+    }
     
     // Set column widths for better formatting
     const wscols = Object.keys(data[0] || {}).map(key => ({
@@ -310,6 +331,8 @@ export default function App() {
 
     // Apply number formatting to currency columns
     const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
+    const headerRow = title ? 2 : 0; // Data headers are on row 3 (index 2) if title exists
+
     for (let R = range.s.r; R <= range.e.r; ++R) {
       for (let C = range.s.c; C <= range.e.c; ++C) {
         const cell_address = { c: C, r: R };
@@ -317,20 +340,21 @@ export default function App() {
         const cell = worksheet[cell_ref];
         if (!cell || cell.t !== 'n') continue;
 
-        // Check if the header for this column contains "Valor" or "Saldo" or "Entradas" or "Saídas"
-        const header_cell = worksheet[XLSX.utils.encode_cell({ c: C, r: 0 })];
+        // Check the header for this column
+        const header_cell = worksheet[XLSX.utils.encode_cell({ c: C, r: headerRow })];
         if (header_cell && (
           header_cell.v.toString().includes('Valor') || 
           header_cell.v.toString().includes('Saldo') ||
           header_cell.v.toString().includes('Entradas') ||
-          header_cell.v.toString().includes('Saídas')
+          header_cell.v.toString().includes('Saídas') ||
+          header_cell.v.toString().includes('Receita') ||
+          header_cell.v.toString().includes('Despesa')
         )) {
           cell.z = '"R$ "#,##0.00'; // Brazilian currency format
         }
       }
     }
 
-    const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Relatório");
     
     // Generate buffer
@@ -1245,7 +1269,7 @@ export default function App() {
           <p className="text-stone-500">Lista completa de membros que celebram aniversário em {new Date().toLocaleDateString('pt-BR', { month: 'long' })}.</p>
         </div>
         <button 
-          onClick={() => exportToExcel(birthdays, 'Aniversariantes_Mes')}
+          onClick={() => exportToExcel(birthdays, 'Aniversariantes_Mes', `ANIVERSARIANTES DO MÊS - ${new Date().toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}`)}
           className="bg-white border border-stone-200 text-stone-600 px-4 py-2 rounded-xl flex items-center gap-2 hover:bg-stone-50 transition-colors shadow-sm"
         >
           <Download size={20} /> Exportar Lista
@@ -1366,7 +1390,7 @@ export default function App() {
         Saídas: row.expense,
         Saldo: row.balance
       }));
-      exportToExcel(exportData, `Balancete_${reportType}`);
+      exportToExcel(exportData, `Balancete_${reportType}`, `BALANCETE ${reportType === 'monthly' ? 'MENSAL' : 'ANUAL'} - ECCLESIA MANAGER`);
     };
 
     return (
@@ -1564,7 +1588,8 @@ export default function App() {
         'Valor (R$)': totalIncome - totalExpense
       } as any);
 
-      exportToExcel(exportData, `Fluxo_Caixa_${filters.startDate || 'geral'}_${filters.endDate || 'hoje'}`);
+      const periodText = `Período: ${filters.startDate || 'Início'} até ${filters.endDate || 'Hoje'}`;
+      exportToExcel(exportData, `Fluxo_Caixa_${filters.startDate || 'geral'}_${filters.endDate || 'hoje'}`, `RELATÓRIO DE FLUXO DE CAIXA - ${periodText}`);
     };
 
     return (
