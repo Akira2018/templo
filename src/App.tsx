@@ -26,7 +26,8 @@ import {
   MapPin,
   Briefcase,
   Star,
-  UserPlus
+  UserPlus,
+  Cake
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
@@ -303,9 +304,31 @@ export default function App() {
     
     // Set column widths for better formatting
     const wscols = Object.keys(data[0] || {}).map(key => ({
-      wch: Math.max(key.length, ...data.map(row => (row[key]?.toString() || "").length)) + 2
+      wch: Math.max(key.length, ...data.map(row => (row[key]?.toString() || "").length)) + 5
     }));
     worksheet['!cols'] = wscols;
+
+    // Apply number formatting to currency columns
+    const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
+    for (let R = range.s.r; R <= range.e.r; ++R) {
+      for (let C = range.s.c; C <= range.e.c; ++C) {
+        const cell_address = { c: C, r: R };
+        const cell_ref = XLSX.utils.encode_cell(cell_address);
+        const cell = worksheet[cell_ref];
+        if (!cell || cell.t !== 'n') continue;
+
+        // Check if the header for this column contains "Valor" or "Saldo" or "Entradas" or "Saídas"
+        const header_cell = worksheet[XLSX.utils.encode_cell({ c: C, r: 0 })];
+        if (header_cell && (
+          header_cell.v.toString().includes('Valor') || 
+          header_cell.v.toString().includes('Saldo') ||
+          header_cell.v.toString().includes('Entradas') ||
+          header_cell.v.toString().includes('Saídas')
+        )) {
+          cell.z = '"R$ "#,##0.00'; // Brazilian currency format
+        }
+      }
+    }
 
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Relatório");
@@ -313,7 +336,7 @@ export default function App() {
     // Generate buffer
     const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
     const dataBlob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=UTF-8' });
-    saveAs(dataBlob, `${fileName}_${new Date().getTime()}.xlsx`);
+    saveAs(dataBlob, `${fileName}_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
   const fetchCashFlow = async () => {
@@ -496,6 +519,7 @@ export default function App() {
       });
       fetchMembers();
       fetchStats();
+      fetchBirthdays();
     }
   };
 
@@ -550,69 +574,105 @@ export default function App() {
         </button>
       </div>
       
-      <div className="bg-white rounded-2xl border border-stone-100 card-shadow overflow-hidden">
-        <div className="p-4 border-b border-stone-100 flex items-center gap-3">
-          <Search size={20} className="text-stone-400" />
-          <input 
-            type="text" 
-            placeholder="Buscar membros..." 
-            className="flex-1 bg-transparent border-none focus:ring-0 text-stone-900 placeholder-stone-400"
-          />
+      <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
+        <div className="xl:col-span-3 bg-white rounded-2xl border border-stone-100 card-shadow overflow-hidden">
+          <div className="p-4 border-b border-stone-100 flex items-center gap-3">
+            <Search size={20} className="text-stone-400" />
+            <input 
+              type="text" 
+              placeholder="Buscar membros..." 
+              className="flex-1 bg-transparent border-none focus:ring-0 text-stone-900 placeholder-stone-400"
+            />
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead className="bg-stone-50 text-stone-500 text-xs uppercase tracking-wider">
+                <tr>
+                  <th className="px-6 py-4 font-semibold">Nome</th>
+                  <th className="px-6 py-4 font-semibold">Igreja</th>
+                  <th className="px-6 py-4 font-semibold">Cargo / Ministério</th>
+                  <th className="px-6 py-4 font-semibold">Contato</th>
+                  <th className="px-6 py-4 font-semibold">Status</th>
+                  <th className="px-6 py-4 font-semibold"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-100">
+                {members.map(member => (
+                  <tr key={member.id} className="hover:bg-stone-50/50 transition-colors">
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-stone-100 flex items-center justify-center text-stone-600 font-bold text-sm overflow-hidden border border-stone-200">
+                          {member.photo ? (
+                            <img src={member.photo} alt={member.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                          ) : (
+                            member.name.charAt(0)
+                          )}
+                        </div>
+                        <div>
+                          <span className="font-medium text-stone-900 block">{member.name}</span>
+                          <span className="text-[10px] text-stone-400 uppercase font-bold">{member.marital_status}</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-sm text-stone-600">{member.church_name || 'N/A'}</td>
+                    <td className="px-6 py-4">
+                      <div className="text-sm text-stone-900 font-medium">{member.role}</div>
+                      <div className="text-xs text-stone-500">{member.ministry_leader}</div>
+                    </td>
+                    <td className="px-6 py-4 text-sm text-stone-600">
+                      <div>{member.email}</div>
+                      <div className="text-xs text-stone-400">{member.phone}</div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase ${
+                        member.status === 'Ativo(a)' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
+                      }`}>
+                        {member.status}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <button className="text-stone-400 hover:text-stone-900 transition-colors">
+                        <ChevronRight size={20} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-        <table className="w-full text-left">
-          <thead className="bg-stone-50 text-stone-500 text-xs uppercase tracking-wider">
-            <tr>
-              <th className="px-6 py-4 font-semibold">Nome</th>
-              <th className="px-6 py-4 font-semibold">Igreja</th>
-              <th className="px-6 py-4 font-semibold">Cargo / Ministério</th>
-              <th className="px-6 py-4 font-semibold">Contato</th>
-              <th className="px-6 py-4 font-semibold">Status</th>
-              <th className="px-6 py-4 font-semibold"></th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-stone-100">
-            {members.map(member => (
-              <tr key={member.id} className="hover:bg-stone-50/50 transition-colors">
-                <td className="px-6 py-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-stone-100 flex items-center justify-center text-stone-600 font-bold text-sm overflow-hidden border border-stone-200">
-                      {member.photo ? (
-                        <img src={member.photo} alt={member.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                      ) : (
-                        member.name.charAt(0)
-                      )}
-                    </div>
-                    <div>
-                      <span className="font-medium text-stone-900 block">{member.name}</span>
-                      <span className="text-[10px] text-stone-400 uppercase font-bold">{member.marital_status}</span>
-                    </div>
+
+        <div className="bg-white rounded-2xl border border-stone-100 card-shadow p-6 h-fit">
+          <div className="flex items-center gap-2 mb-6">
+            <div className="p-2 bg-rose-50 text-rose-600 rounded-lg">
+              <Cake size={20} />
+            </div>
+            <h3 className="font-bold text-stone-900">Aniversariantes do Mês</h3>
+          </div>
+          
+          <div className="space-y-4">
+            {birthdays.length > 0 ? birthdays.map((b, idx) => (
+              <div key={idx} className="flex items-center justify-between p-3 rounded-xl hover:bg-stone-50 transition-colors">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center font-bold text-xs">
+                    {b.name.charAt(0)}
                   </div>
-                </td>
-                <td className="px-6 py-4 text-sm text-stone-600">{member.church_name || 'N/A'}</td>
-                <td className="px-6 py-4">
-                  <div className="text-sm text-stone-900 font-medium">{member.role}</div>
-                  <div className="text-xs text-stone-500">{member.ministry_leader}</div>
-                </td>
-                <td className="px-6 py-4 text-sm text-stone-600">
-                  <div>{member.email}</div>
-                  <div className="text-xs text-stone-400">{member.phone}</div>
-                </td>
-                <td className="px-6 py-4">
-                  <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase ${
-                    member.status === 'Ativo(a)' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
-                  }`}>
-                    {member.status}
-                  </span>
-                </td>
-                <td className="px-6 py-4 text-right">
-                  <button className="text-stone-400 hover:text-stone-900 transition-colors">
-                    <ChevronRight size={20} />
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                  <div>
+                    <p className="text-sm font-semibold text-stone-900">{b.name}</p>
+                    <p className="text-[10px] text-stone-400 font-bold uppercase">
+                      {new Date(b.birth_date).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' })}
+                    </p>
+                  </div>
+                </div>
+                <div className="text-xs font-bold text-rose-600 bg-rose-50 px-2 py-1 rounded-md">
+                  Dia {new Date(b.birth_date).getDate()}
+                </div>
+              </div>
+            )) : (
+              <p className="text-sm text-stone-400 text-center py-4">Nenhum aniversariante este mês.</p>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Member Modal */}
@@ -1177,6 +1237,83 @@ export default function App() {
     </div>
   );
 
+  const renderBirthdays = () => (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <div>
+          <h2 className="text-2xl font-bold text-stone-900">Aniversariantes do Mês</h2>
+          <p className="text-stone-500">Lista completa de membros que celebram aniversário em {new Date().toLocaleDateString('pt-BR', { month: 'long' })}.</p>
+        </div>
+        <button 
+          onClick={() => exportToExcel(birthdays, 'Aniversariantes_Mes')}
+          className="bg-white border border-stone-200 text-stone-600 px-4 py-2 rounded-xl flex items-center gap-2 hover:bg-stone-50 transition-colors shadow-sm"
+        >
+          <Download size={20} /> Exportar Lista
+        </button>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-stone-100 card-shadow overflow-hidden">
+        <table className="w-full text-left">
+          <thead className="bg-stone-50 text-stone-500 text-xs uppercase tracking-wider">
+            <tr>
+              <th className="px-6 py-4 font-semibold">Dia</th>
+              <th className="px-6 py-4 font-semibold">Membro</th>
+              <th className="px-6 py-4 font-semibold">Data de Nascimento</th>
+              <th className="px-6 py-4 font-semibold">Idade</th>
+              <th className="px-6 py-4 font-semibold">Ação</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-stone-100">
+            {birthdays.length > 0 ? birthdays.map((b, idx) => {
+              const birthDate = new Date(b.birth_date);
+              const today = new Date();
+              let age = today.getFullYear() - birthDate.getFullYear();
+              const m = today.getMonth() - birthDate.getMonth();
+              if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
+                age--;
+              }
+
+              return (
+                <tr key={idx} className="hover:bg-stone-50/50 transition-colors">
+                  <td className="px-6 py-4">
+                    <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center font-bold">
+                      {birthDate.getDate()}
+                    </div>
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-stone-100 flex items-center justify-center text-stone-600 font-bold text-xs">
+                        {b.name.charAt(0)}
+                      </div>
+                      <span className="font-medium text-stone-900">{b.name}</span>
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 text-sm text-stone-600">
+                    {birthDate.toLocaleDateString('pt-BR')}
+                  </td>
+                  <td className="px-6 py-4 text-sm text-stone-600">
+                    {age} anos
+                  </td>
+                  <td className="px-6 py-4">
+                    <button className="text-indigo-600 hover:text-indigo-800 text-sm font-bold flex items-center gap-1">
+                      <MessageSquare size={14} /> Enviar Parabéns
+                    </button>
+                  </td>
+                </tr>
+              );
+            }) : (
+              <tr>
+                <td colSpan={5} className="px-6 py-12 text-center text-stone-400 italic">
+                  Nenhum aniversariante encontrado para este mês.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
   const renderPrayers = () => (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -1396,13 +1533,38 @@ export default function App() {
 
     const handleExport = () => {
       const exportData = cashFlowTransactions.map(tx => ({
-        Data: new Date(tx.date).toLocaleDateString('pt-BR'),
-        Tipo: tx.type === 'income' ? 'Entrada' : 'Saída',
-        Categoria: tx.category,
-        Descrição: tx.description,
-        Valor: tx.amount
+        'Data': new Date(tx.date).toLocaleDateString('pt-BR'),
+        'Tipo': tx.type === 'income' ? 'Entrada' : 'Saída',
+        'Categoria': tx.category,
+        'Descrição': tx.description,
+        'Valor (R$)': tx.amount
       }));
-      exportToExcel(exportData, 'Fluxo_de_Caixa');
+
+      // Add summary rows
+      exportData.push({} as any); // Empty row
+      exportData.push({
+        'Data': 'RESUMO DO PERÍODO',
+        'Tipo': '',
+        'Categoria': '',
+        'Descrição': 'Total Entradas',
+        'Valor (R$)': totalIncome
+      } as any);
+      exportData.push({
+        'Data': '',
+        'Tipo': '',
+        'Categoria': '',
+        'Descrição': 'Total Saídas',
+        'Valor (R$)': totalExpense
+      } as any);
+      exportData.push({
+        'Data': '',
+        'Tipo': '',
+        'Categoria': '',
+        'Descrição': 'Saldo Líquido',
+        'Valor (R$)': totalIncome - totalExpense
+      } as any);
+
+      exportToExcel(exportData, `Fluxo_Caixa_${filters.startDate || 'geral'}_${filters.endDate || 'hoje'}`);
     };
 
     return (
@@ -1540,6 +1702,7 @@ export default function App() {
             <SidebarItem icon={Activity} label="Fluxo de Caixa" active={activeTab === 'cashflow'} onClick={() => setActiveTab('cashflow')} />
             <SidebarItem icon={BarChart3} label="Relatórios" active={activeTab === 'reports'} onClick={() => setActiveTab('reports')} />
             <SidebarItem icon={Calendar} label="Agenda" active={activeTab === 'events'} onClick={() => setActiveTab('events')} />
+            <SidebarItem icon={Cake} label="Aniversariantes" active={activeTab === 'birthdays'} onClick={() => setActiveTab('birthdays')} />
             <SidebarItem icon={MessageSquare} label="Orações" active={activeTab === 'prayers'} onClick={() => setActiveTab('prayers')} />
           </nav>
         </div>
@@ -1602,6 +1765,7 @@ export default function App() {
               {activeTab === 'reports' && renderReports()}
               {activeTab === 'prayers' && renderPrayers()}
               {activeTab === 'events' && renderEvents()}
+              {activeTab === 'birthdays' && renderBirthdays()}
             </motion.div>
           </AnimatePresence>
         </div>
