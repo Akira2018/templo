@@ -9,6 +9,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
+    "import:sql-members": "tsx scripts/import-sql-members.ts",
+    "import:sqlite-members": "tsx scripts/import-sqlite-members.ts",
     "predeploy": "npm run build",
     "deploy": "gh-pages -d dist"
   },

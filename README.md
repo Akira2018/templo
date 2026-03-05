@@ -71,3 +71,19 @@ O repositorio ja inclui `render.yaml` para subir a API com SQLite persistente.
 2. Crie `VITE_API_BASE_URL` com a URL publica do Render, por exemplo:
    `https://templo-api.onrender.com`
 3. Rode o workflow `Deploy To GitHub Pages` novamente.
+
+## Importar membros de outro SQLite
+
+Se voce tem um arquivo SQLite legado (`.db`, `.sqlite`, `.sqlite3`) com tabela `members` ou `membros`, importe para o banco atual com:
+
+`npm run import:sqlite-members -- caminho/para/legado.sqlite --db church.db`
+
+Se omitir `--db`, o destino padrao sera `church.db`.
+
+## Importar membros de arquivo SQL (.sql)
+
+Para dump SQL (ex.: `membros.sql`):
+
+`npm run import:sql-members -- caminho/para/membros.sql --db church.db`
+
+Tambem aceita `-db` no lugar de `--db`.
