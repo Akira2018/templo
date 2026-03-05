@@ -154,6 +154,12 @@ interface IncomeByCategory {
   total: number;
 }
 
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+
+const apiFetch = (path: string, init?: RequestInit) => {
+  return fetch(`${API_BASE_URL}${path}`, init);
+};
+
 // --- Components ---
 
 const SidebarItem = ({ icon: Icon, label, active, onClick }: { icon: any, label: string, active: boolean, onClick: () => void }) => (
@@ -264,37 +270,37 @@ export default function App() {
   }, [reportType, filters]);
 
   const fetchProfessions = async () => {
-    const res = await fetch('/api/professions');
+    const res = await apiFetch('/api/professions');
     const data = await res.json();
     setProfessions(data);
   };
 
   const fetchSkills = async () => {
-    const res = await fetch('/api/skills');
+    const res = await apiFetch('/api/skills');
     const data = await res.json();
     setSkills(data);
   };
 
   const fetchTalents = async () => {
-    const res = await fetch('/api/talents');
+    const res = await apiFetch('/api/talents');
     const data = await res.json();
     setTalents(data);
   };
 
   const fetchChurches = async () => {
-    const res = await fetch('/api/churches');
+    const res = await apiFetch('/api/churches');
     const data = await res.json();
     setChurches(data);
   };
 
   const fetchBirthdays = async () => {
-    const res = await fetch('/api/members/birthdays');
+    const res = await apiFetch('/api/members/birthdays');
     const data = await res.json();
     setBirthdays(data);
   };
 
   const fetchIncomeByCategory = async () => {
-    const res = await fetch('/api/stats/income-by-category');
+    const res = await apiFetch('/api/stats/income-by-category');
     const data = await res.json();
     setIncomeByCategory(data);
   };
@@ -369,49 +375,49 @@ export default function App() {
     if (filters.endDate) params.append('endDate', filters.endDate);
     if (filters.category !== 'all') params.append('category', filters.category);
     
-    const res = await fetch(`/api/transactions?${params.toString()}`);
+    const res = await apiFetch(`/api/transactions?${params.toString()}`);
     const data = await res.json();
     setCashFlowTransactions(data);
   };
 
   const fetchCategories = async () => {
-    const res = await fetch('/api/transactions/categories');
+    const res = await apiFetch('/api/transactions/categories');
     const data = await res.json();
     setCategories(data);
   };
 
   const fetchBalanceSheet = async () => {
-    const res = await fetch(`/api/reports/balance-sheet?type=${reportType}`);
+    const res = await apiFetch(`/api/reports/balance-sheet?type=${reportType}`);
     const data = await res.json();
     setBalanceSheet(data);
   };
 
   const fetchStats = async () => {
-    const res = await fetch('/api/stats');
+    const res = await apiFetch('/api/stats');
     const data = await res.json();
     setStats(data);
   };
 
   const fetchMembers = async () => {
-    const res = await fetch('/api/members');
+    const res = await apiFetch('/api/members');
     const data = await res.json();
     setMembers(data);
   };
 
   const fetchTransactions = async () => {
-    const res = await fetch('/api/transactions');
+    const res = await apiFetch('/api/transactions');
     const data = await res.json();
     setTransactions(data);
   };
 
   const fetchEvents = async () => {
-    const res = await fetch('/api/events');
+    const res = await apiFetch('/api/events');
     const data = await res.json();
     setEvents(data);
   };
 
   const fetchPrayers = async () => {
-    const res = await fetch('/api/prayer-requests');
+    const res = await apiFetch('/api/prayer-requests');
     const data = await res.json();
     setPrayers(data);
   };
@@ -527,7 +533,7 @@ export default function App() {
 
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = await fetch('/api/members', {
+    const res = await apiFetch('/api/members', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(newMember)
@@ -574,7 +580,7 @@ export default function App() {
       const reader = new FileReader();
       reader.onloadend = async () => {
         const base64 = reader.result as string;
-        const res = await fetch('/api/upload', {
+        const res = await apiFetch('/api/upload', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ image: base64 })
@@ -979,7 +985,7 @@ export default function App() {
 
   const handleAddEvent = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = await fetch('/api/events', {
+    const res = await apiFetch('/api/events', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(newEvent)
@@ -1798,3 +1804,5 @@ export default function App() {
     </div>
   );
 }
+
+
