@@ -51,3 +51,23 @@ Exemplo de chamadas no frontend:
 
 - `https://SEU_BACKEND_PUBLICO/api/members`
 - `https://SEU_BACKEND_PUBLICO/api/stats`
+
+### Deploy rapido no Render (backend)
+
+O repositorio ja inclui `render.yaml` para subir a API com SQLite persistente.
+
+1. No Render, clique em `New +` -> `Blueprint` e conecte o repo `Akira2018/templo`.
+2. O Render vai criar o servico `templo-api` com disco persistente.
+3. Em `Environment`, ajuste:
+   - `CORS_ORIGIN=https://akira2018.github.io`
+   - (opcional) `PORT` nao precisa definir manualmente.
+4. Aguarde deploy e teste:
+   - `https://SEU_BACKEND_PUBLICO/api/health`
+   - `https://SEU_BACKEND_PUBLICO/api/stats`
+
+### Ligando frontend publicado ao backend
+
+1. No GitHub: `Settings` -> `Secrets and variables` -> `Actions` -> `Variables`.
+2. Crie `VITE_API_BASE_URL` com a URL publica do Render, por exemplo:
+   `https://templo-api.onrender.com`
+3. Rode o workflow `Deploy To GitHub Pages` novamente.

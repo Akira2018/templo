@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: templo-api
+    runtime: node
+    plan: free
+    buildCommand: npm install --include=dev
+    startCommand: NODE_ENV=production npx tsx server.ts
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: DB_PATH
+        value: /opt/render/project/src/data/church.db
+      - key: CORS_ORIGIN
+        sync: false
+
+disks:
+  - name: templo-data
+    mountPath: /opt/render/project/src/data
+    sizeGB: 1

@@ -1,9 +1,15 @@
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
+import fs from "fs";
 import path from "path";
 
-const db = new Database("church.db");
+const dbPath = process.env.DB_PATH || "church.db";
+const dbDir = path.dirname(dbPath);
+if (dbDir && dbDir !== ".") {
+  fs.mkdirSync(dbDir, { recursive: true });
+}
+const db = new Database(dbPath);
 
 // Initialize Database Schema
 db.exec(`
@@ -204,6 +210,10 @@ async function startServer() {
   });
 
   app.use(express.json());
+
+  app.get('/api/health', (_req, res) => {
+    res.json({ ok: true, dbPath });
+  });
 
   // --- API Routes ---
 
@@ -435,10 +445,20 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.join(__dirname, "dist")));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(__dirname, "dist", "index.html"));
-    });
+    const distPath = path.join(__dirname, "dist");
+    if (fs.existsSync(distPath)) {
+      app.use(express.static(distPath));
+      app.get("*", (req, res) => {
+        res.sendFile(path.join(distPath, "index.html"));
+      });
+    } else {
+      app.get('/', (_req, res) => {
+        res.json({
+          message: 'Templo API is running',
+          health: '/api/health',
+        });
+      });
+    }
   }
 
   app.listen(PORT, "0.0.0.0", () => {
