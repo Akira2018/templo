@@ -2,6 +2,7 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import fs from "fs";
+import os from "os";
 import path from "path";
 
 const dbPath = process.env.DB_PATH || "church.db";
@@ -10,6 +11,130 @@ if (dbDir && dbDir !== ".") {
   fs.mkdirSync(dbDir, { recursive: true });
 }
 const db = new Database(dbPath);
+
+type ImportedMemberRow = Record<string, unknown>;
+
+function pickValue(row: ImportedMemberRow, keys: string[]) {
+  for (const key of keys) {
+    const value = row[key];
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function normalizeDateValue(value: unknown): string | null {
+  if (!value) return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+  const ddmmyyyy = text.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (ddmmyyyy) {
+    const [, dd, mm, yyyy] = ddmmyyyy;
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  return text;
+}
+
+function readSourceMembersFromDb(sourceDb: Database.Database) {
+  const hasMembers = sourceDb
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='members'")
+    .get();
+  if (hasMembers) {
+    return sourceDb.prepare("SELECT * FROM members").all() as ImportedMemberRow[];
+  }
+
+  const hasMembros = sourceDb
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='membros'")
+    .get();
+  if (hasMembros) {
+    return sourceDb.prepare("SELECT * FROM membros").all() as ImportedMemberRow[];
+  }
+
+  throw new Error("Tabela de origem nao encontrada. Use members ou membros.");
+}
+
+function importMembersIntoMainDb(sourceRows: ImportedMemberRow[]) {
+  const churchExistsStmt = db.prepare("SELECT id FROM churches WHERE id = ?");
+  const byCpfStmt = db.prepare("SELECT id FROM members WHERE cpf = ?");
+  const byEmailStmt = db.prepare("SELECT id FROM members WHERE email = ?");
+
+  const insertStmt = db.prepare(`
+    INSERT INTO members (
+      name, photo, church_id, birth_date, marital_status, role,
+      ministry_leader, profession, skill, email, phone, cpf,
+      rg, cep, logradouro, complement, bairro, cidade, uf,
+      nr_imovel, observation, status, error_cep, baptism_date, talents
+    ) VALUES (
+      @name, @photo, @church_id, @birth_date, @marital_status, @role,
+      @ministry_leader, @profession, @skill, @email, @phone, @cpf,
+      @rg, @cep, @logradouro, @complement, @bairro, @cidade, @uf,
+      @nr_imovel, @observation, @status, @error_cep, @baptism_date, @talents
+    )
+  `);
+
+  let inserted = 0;
+  let skipped = 0;
+
+  const tx = db.transaction(() => {
+    for (const row of sourceRows) {
+      const name = pickValue(row, ["name", "nome_membro"]);
+      if (!name) {
+        skipped += 1;
+        continue;
+      }
+
+      const mapped: Record<string, unknown> = {
+        name: String(name).trim(),
+        photo: pickValue(row, ["photo", "foto"]),
+        church_id: Number(pickValue(row, ["church_id", "igreja_id"]) || 0) || null,
+        birth_date: normalizeDateValue(pickValue(row, ["birth_date", "data_aniversario"])),
+        marital_status: pickValue(row, ["marital_status", "estado_civil"]) || "Nao informou",
+        role: pickValue(row, ["role", "cargo"]) || "Membro(a)",
+        ministry_leader: pickValue(row, ["ministry_leader", "grupo"]) || "Nao ocupa cargo de Lideranca",
+        profession: pickValue(row, ["profession"]),
+        skill: pickValue(row, ["skill"]),
+        email: pickValue(row, ["email"]),
+        phone: pickValue(row, ["phone", "numero_telefone"]),
+        cpf: pickValue(row, ["cpf"]),
+        rg: pickValue(row, ["rg"]),
+        cep: pickValue(row, ["cep"]),
+        logradouro: pickValue(row, ["logradouro"]),
+        complement: pickValue(row, ["complement", "complemento"]),
+        bairro: pickValue(row, ["bairro"]),
+        cidade: pickValue(row, ["cidade"]),
+        uf: pickValue(row, ["uf", "estado"]),
+        nr_imovel: pickValue(row, ["nr_imovel"]),
+        observation: pickValue(row, ["observation", "observacao"]),
+        status: pickValue(row, ["status", "situacao"]) || "Ativo(a)",
+        error_cep: pickValue(row, ["error_cep", "erro_cep"]),
+        baptism_date: normalizeDateValue(pickValue(row, ["baptism_date"])),
+        talents: pickValue(row, ["talents"]),
+      };
+
+      if (mapped.cpf && byCpfStmt.get(mapped.cpf)) {
+        skipped += 1;
+        continue;
+      }
+
+      if (mapped.email && byEmailStmt.get(mapped.email)) {
+        skipped += 1;
+        continue;
+      }
+
+      if (mapped.church_id && !churchExistsStmt.get(mapped.church_id)) {
+        mapped.church_id = null;
+      }
+
+      insertStmt.run(mapped);
+      inserted += 1;
+    }
+  });
+
+  tx();
+  return { inserted, skipped, total: sourceRows.length };
+}
 
 // Initialize Database Schema
 db.exec(`
@@ -209,7 +334,7 @@ async function startServer() {
     next();
   });
 
-  app.use(express.json());
+  app.use(express.json({ limit: '50mb' }));
 
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true, dbPath });
@@ -253,6 +378,63 @@ async function startServer() {
       `INSERT INTO members (${fields.join(', ')}) VALUES (${placeholders})`
     ).run(...values);
     res.json({ id: info.lastInsertRowid });
+  });
+
+  app.post('/api/members/import', (req, res) => {
+    try {
+      const { fileName, fileType, content, encoding } = req.body as {
+        fileName?: string;
+        fileType?: 'sql' | 'sqlite';
+        content?: string;
+        encoding?: 'text' | 'base64';
+      };
+
+      if (!fileName || !fileType || !content) {
+        res.status(400).json({ error: 'Payload invalido. Informe fileName, fileType e content.' });
+        return;
+      }
+
+      let sourceRows: ImportedMemberRow[] = [];
+
+      if (fileType === 'sql') {
+        if (encoding !== 'text') {
+          res.status(400).json({ error: 'Para SQL, use encoding=text.' });
+          return;
+        }
+        const memDb = new Database(':memory:');
+        try {
+          memDb.exec(content);
+          sourceRows = readSourceMembersFromDb(memDb);
+        } finally {
+          memDb.close();
+        }
+      } else {
+        if (encoding !== 'base64') {
+          res.status(400).json({ error: 'Para SQLite, use encoding=base64.' });
+          return;
+        }
+
+        const tempFile = path.join(os.tmpdir(), `members-import-${Date.now()}-${fileName}`);
+        fs.writeFileSync(tempFile, Buffer.from(content, 'base64'));
+
+        const sourceDb = new Database(tempFile, { readonly: true });
+        try {
+          sourceRows = readSourceMembersFromDb(sourceDb);
+        } finally {
+          sourceDb.close();
+          fs.unlinkSync(tempFile);
+        }
+      }
+
+      const result = importMembersIntoMainDb(sourceRows);
+      res.json({
+        ok: true,
+        ...result,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Erro ao importar arquivo';
+      res.status(500).json({ error: message });
+    }
   });
 
   // Churches

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { 
   Users, 
   DollarSign, 
@@ -215,6 +215,8 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [showEventModal, setShowEventModal] = useState(false);
   const [showMemberModal, setShowMemberModal] = useState(false);
+  const [isImportingMembers, setIsImportingMembers] = useState(false);
+  const membersImportInputRef = useRef<HTMLInputElement | null>(null);
   const [professions, setProfessions] = useState<{id: number, name: string}[]>([]);
   const [skills, setSkills] = useState<{id: number, name: string}[]>([]);
   const [talents, setTalents] = useState<{id: number, name: string}[]>([]);
@@ -592,16 +594,102 @@ export default function App() {
     }
   };
 
+  const toBase64 = (buffer: ArrayBuffer) => {
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize);
+      binary += String.fromCharCode(...chunk);
+    }
+    return btoa(binary);
+  };
+
+  const handleMembersFileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const lowerName = file.name.toLowerCase();
+    const isSql = lowerName.endsWith('.sql');
+    const isSqlite = ['.db', '.sqlite', '.sqlite3'].some((ext) => lowerName.endsWith(ext));
+
+    if (!isSql && !isSqlite) {
+      alert('Formato nao suportado. Use .sql, .db, .sqlite ou .sqlite3.');
+      e.target.value = '';
+      return;
+    }
+
+    try {
+      setIsImportingMembers(true);
+
+      let payload: { fileName: string; fileType: 'sql' | 'sqlite'; encoding: 'text' | 'base64'; content: string };
+      if (isSql) {
+        const text = await file.text();
+        payload = {
+          fileName: file.name,
+          fileType: 'sql',
+          encoding: 'text',
+          content: text,
+        };
+      } else {
+        const buffer = await file.arrayBuffer();
+        payload = {
+          fileName: file.name,
+          fileType: 'sqlite',
+          encoding: 'base64',
+          content: toBase64(buffer),
+        };
+      }
+
+      const res = await apiFetch('/api/members/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || 'Falha ao importar membros.');
+      }
+
+      alert(`Importacao concluida. Inseridos: ${data.inserted}; Ignorados: ${data.skipped}.`);
+      await Promise.all([fetchMembers(), fetchStats(), fetchBirthdays()]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Erro ao importar arquivo.';
+      alert(message);
+    } finally {
+      setIsImportingMembers(false);
+      e.target.value = '';
+    }
+  };
+
   const renderMembers = () => (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-stone-900">Gestão de Membresia</h2>
-        <button 
-          onClick={() => setShowMemberModal(true)}
-          className="bg-stone-900 text-white px-4 py-2 rounded-xl flex items-center gap-2 hover:bg-stone-800 transition-colors"
-        >
-          <UserPlus size={20} /> Novo Membro
-        </button>
+        <div className="flex items-center gap-3">
+          <input
+            ref={membersImportInputRef}
+            type="file"
+            className="hidden"
+            accept=".sql,.db,.sqlite,.sqlite3"
+            onChange={handleMembersFileImport}
+          />
+          <button
+            type="button"
+            onClick={() => membersImportInputRef.current?.click()}
+            disabled={isImportingMembers}
+            className="bg-white text-stone-700 border border-stone-200 px-4 py-2 rounded-xl flex items-center gap-2 hover:bg-stone-50 transition-colors disabled:opacity-60"
+          >
+            <Upload size={18} /> {isImportingMembers ? 'Importando...' : 'Importar Arquivo'}
+          </button>
+          <button 
+            onClick={() => setShowMemberModal(true)}
+            className="bg-stone-900 text-white px-4 py-2 rounded-xl flex items-center gap-2 hover:bg-stone-800 transition-colors"
+          >
+            <UserPlus size={20} /> Novo Membro
+          </button>
+        </div>
       </div>
       
       <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
