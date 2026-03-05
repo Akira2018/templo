@@ -4,5 +4,9 @@ dist/
 coverage/
 .DS_Store
 *.log
+*.db
+*.sqlite
+*.sqlite3
+*.sql
 .env*
 !.env.example
