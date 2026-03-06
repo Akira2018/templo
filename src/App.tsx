@@ -619,6 +619,12 @@ export default function App() {
       return;
     }
 
+    if (!API_BASE_URL && window.location.hostname.includes('github.io')) {
+      alert('API nao configurada. Defina VITE_API_BASE_URL nas variaveis do GitHub Actions e redeploy o frontend.');
+      e.target.value = '';
+      return;
+    }
+
     try {
       setIsImportingMembers(true);
 
@@ -647,9 +653,17 @@ export default function App() {
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
+      const raw = await res.text();
+      let data: any = null;
+      try {
+        data = raw ? JSON.parse(raw) : null;
+      } catch {
+        data = null;
+      }
+
       if (!res.ok) {
-        throw new Error(data?.error || 'Falha ao importar membros.');
+        const fallback = raw?.slice(0, 180) || `HTTP ${res.status}`;
+        throw new Error(data?.error || `Falha ao importar membros: ${fallback}`);
       }
 
       alert(`Importacao concluida. Inseridos: ${data.inserted}; Ignorados: ${data.skipped}.`);
