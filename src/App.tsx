@@ -1134,11 +1134,32 @@ export default function App() {
     }
   };
 
+  const handleExportLocalBackup = () => {
+    if (!isStaticGithubMode()) {
+      alert('Backup local disponivel apenas no modo GitHub estatico.');
+      return;
+    }
+
+    const backup = getStaticStore();
+    const fileName = `templo-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json;charset=utf-8' });
+    saveAs(blob, fileName);
+  };
+
   const renderMembers = () => (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-stone-900">Gestão de Membresia</h2>
         <div className="flex items-center gap-3">
+          {isStaticGithubMode() && (
+            <button
+              type="button"
+              onClick={handleExportLocalBackup}
+              className="bg-white text-stone-700 border border-stone-200 px-4 py-2 rounded-xl flex items-center gap-2 hover:bg-stone-50 transition-colors"
+            >
+              <Download size={18} /> Exportar Backup
+            </button>
+          )}
           <input
             ref={membersImportInputRef}
             type="file"
