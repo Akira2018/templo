@@ -156,7 +156,464 @@ interface IncomeByCategory {
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 
+type StaticStore = {
+  members: Member[];
+  churches: Church[];
+  transactions: Transaction[];
+  events: Event[];
+  prayers: PrayerRequest[];
+  professions: {id: number; name: string}[];
+  skills: {id: number; name: string}[];
+  talents: {id: number; name: string}[];
+};
+
+type ImportedMemberRow = Record<string, unknown>;
+
+const STATIC_STORE_KEY = 'templo-static-store-v1';
+
+const defaultStaticStore: StaticStore = {
+  members: [],
+  churches: [
+    {
+      id: 1,
+      name: 'Ecclesia Central',
+      pastor_name: 'Pr. Luiz Israel',
+      email: 'contato@ecclesia.com',
+      phone: '(11) 99999-9999',
+      cep: '',
+      logradouro: '',
+      bairro: '',
+      cidade: 'Sao Paulo',
+      estado: 'SP',
+      nr_imovel: '',
+      observation: '',
+    },
+  ],
+  transactions: [],
+  events: [],
+  prayers: [],
+  professions: [
+    { id: 1, name: 'Autonomo(a)' },
+    { id: 2, name: 'Aposentado(a)' },
+    { id: 3, name: 'Estudante' },
+    { id: 4, name: 'Outros' },
+  ],
+  skills: [
+    { id: 1, name: 'Musica' },
+    { id: 2, name: 'Ensino' },
+    { id: 3, name: 'Acolhimento' },
+    { id: 4, name: 'Outros' },
+  ],
+  talents: [
+    { id: 1, name: 'Lideranca' },
+    { id: 2, name: 'Comunicacao' },
+    { id: 3, name: 'Organizacao' },
+    { id: 4, name: 'Outros' },
+  ],
+};
+
+const isStaticGithubMode = () => {
+  if (typeof window === 'undefined') return false;
+  return !API_BASE_URL && window.location.hostname.includes('github.io');
+};
+
+const getStaticStore = (): StaticStore => {
+  if (typeof window === 'undefined') return structuredClone(defaultStaticStore);
+  const raw = window.localStorage.getItem(STATIC_STORE_KEY);
+  if (!raw) return structuredClone(defaultStaticStore);
+  try {
+    const parsed = JSON.parse(raw) as Partial<StaticStore>;
+    return {
+      ...structuredClone(defaultStaticStore),
+      ...parsed,
+      members: parsed.members || [],
+      churches: parsed.churches || structuredClone(defaultStaticStore.churches),
+      transactions: parsed.transactions || [],
+      events: parsed.events || [],
+      prayers: parsed.prayers || [],
+      professions: parsed.professions || structuredClone(defaultStaticStore.professions),
+      skills: parsed.skills || structuredClone(defaultStaticStore.skills),
+      talents: parsed.talents || structuredClone(defaultStaticStore.talents),
+    };
+  } catch {
+    return structuredClone(defaultStaticStore);
+  }
+};
+
+const setStaticStore = (store: StaticStore) => {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(STATIC_STORE_KEY, JSON.stringify(store));
+};
+
+const jsonResponse = (payload: unknown, status = 200) =>
+  new Response(JSON.stringify(payload), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+const parseSqlValue = (value: string): unknown => {
+  const trimmed = value.trim();
+  if (!trimmed || /^null$/i.test(trimmed)) return null;
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    return trimmed.slice(1, -1).replace(/''/g, "'");
+  }
+  if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+    return Number(trimmed);
+  }
+  return trimmed;
+};
+
+const splitSqlTupleValues = (tuple: string): string[] => {
+  const values: string[] = [];
+  let current = '';
+  let inString = false;
+  for (let i = 0; i < tuple.length; i += 1) {
+    const ch = tuple[i];
+    const next = tuple[i + 1];
+    if (ch === "'" && inString && next === "'") {
+      current += "''";
+      i += 1;
+      continue;
+    }
+    if (ch === "'") {
+      inString = !inString;
+      current += ch;
+      continue;
+    }
+    if (ch === ',' && !inString) {
+      values.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  if (current.trim()) values.push(current.trim());
+  return values;
+};
+
+const extractSqlTuples = (valuesBlock: string): string[] => {
+  const tuples: string[] = [];
+  let current = '';
+  let depth = 0;
+  let inString = false;
+  for (let i = 0; i < valuesBlock.length; i += 1) {
+    const ch = valuesBlock[i];
+    const next = valuesBlock[i + 1];
+    if (ch === "'" && inString && next === "'") {
+      current += "''";
+      i += 1;
+      continue;
+    }
+    if (ch === "'") {
+      inString = !inString;
+      current += ch;
+      continue;
+    }
+    if (!inString && ch === '(') {
+      depth += 1;
+      if (depth === 1) {
+        current = '';
+        continue;
+      }
+    }
+    if (!inString && ch === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        tuples.push(current.trim());
+        current = '';
+        continue;
+      }
+    }
+    if (depth >= 1) {
+      current += ch;
+    }
+  }
+  return tuples;
+};
+
+const normalizeSqlDate = (value: unknown): string => {
+  if (!value) return '';
+  const text = String(value).trim();
+  if (!text) return '';
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+  const ddmmyyyy = text.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (ddmmyyyy) {
+    const [, dd, mm, yyyy] = ddmmyyyy;
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  return text;
+};
+
+const importMembersFromSqlText = (sql: string, store: StaticStore) => {
+  const regex = /INSERT\s+INTO\s+[`\"]?([\w]+)[`\"]?\s*\(([^)]+)\)\s*VALUES\s*([\s\S]*?);/gi;
+  let match: RegExpExecArray | null;
+  const parsedRows: ImportedMemberRow[] = [];
+
+  while ((match = regex.exec(sql)) !== null) {
+    const table = match[1].toLowerCase();
+    if (table !== 'membros' && table !== 'members') continue;
+    const columns = match[2].split(',').map((c) => c.trim().replace(/[`\"]/g, ''));
+    const tuples = extractSqlTuples(match[3]);
+    for (const tuple of tuples) {
+      const values = splitSqlTupleValues(tuple).map(parseSqlValue);
+      const row: ImportedMemberRow = {};
+      columns.forEach((col, idx) => {
+        row[col] = values[idx];
+      });
+      parsedRows.push(row);
+    }
+  }
+
+  const existingCpf = new Set(store.members.map((m) => (m.cpf || '').trim()).filter(Boolean));
+  const existingEmail = new Set(store.members.map((m) => (m.email || '').trim().toLowerCase()).filter(Boolean));
+  let nextId = store.members.reduce((max, m) => Math.max(max, m.id), 0) + 1;
+  let inserted = 0;
+  let skipped = 0;
+
+  for (const row of parsedRows) {
+    const name = String(row.name || row.nome_membro || '').trim();
+    if (!name) {
+      skipped += 1;
+      continue;
+    }
+
+    const cpf = String(row.cpf || '').trim();
+    const email = String(row.email || '').trim().toLowerCase();
+    if (cpf && existingCpf.has(cpf)) {
+      skipped += 1;
+      continue;
+    }
+    if (email && existingEmail.has(email)) {
+      skipped += 1;
+      continue;
+    }
+
+    const churchIdRaw = Number(row.church_id || row.igreja_id || 0);
+    const churchId = store.churches.some((c) => c.id === churchIdRaw) ? churchIdRaw : 1;
+    const member: Member = {
+      id: nextId,
+      name,
+      photo: String(row.photo || row.foto || ''),
+      church_id: churchId,
+      birth_date: normalizeSqlDate(row.birth_date || row.data_aniversario),
+      marital_status: String(row.marital_status || row.estado_civil || 'Nao informou'),
+      role: String(row.role || row.cargo || 'Membro(a)'),
+      ministry_leader: String(row.ministry_leader || row.grupo || 'Nao ocupa cargo de Lideranca'),
+      profession: String(row.profession || ''),
+      skill: String(row.skill || ''),
+      email: String(row.email || ''),
+      phone: String(row.phone || row.numero_telefone || ''),
+      cpf,
+      rg: String(row.rg || ''),
+      cep: String(row.cep || ''),
+      logradouro: String(row.logradouro || ''),
+      complement: String(row.complement || row.complemento || ''),
+      bairro: String(row.bairro || ''),
+      cidade: String(row.cidade || ''),
+      uf: String(row.uf || row.estado || ''),
+      nr_imovel: String(row.nr_imovel || ''),
+      observation: String(row.observation || row.observacao || ''),
+      status: String(row.status || row.situacao || 'Ativo(a)'),
+      baptism_date: normalizeSqlDate(row.baptism_date),
+      talents: String(row.talents || ''),
+    };
+
+    store.members.push(member);
+    nextId += 1;
+    inserted += 1;
+    if (cpf) existingCpf.add(cpf);
+    if (email) existingEmail.add(email);
+  }
+
+  return { inserted, skipped, total: parsedRows.length };
+};
+
+const buildStats = (store: StaticStore): Stats => {
+  const now = new Date();
+  const currentMonth = now.toISOString().slice(0, 7);
+  const currentYear = String(now.getFullYear());
+  const income = store.transactions.filter((t) => t.type === 'income');
+  const expense = store.transactions.filter((t) => t.type === 'expense');
+  const monthIncome = income.filter((t) => t.date?.startsWith(currentMonth));
+  const monthExpense = expense.filter((t) => t.date?.startsWith(currentMonth));
+  const yearIncome = income.filter((t) => t.date?.startsWith(currentYear));
+  const yearExpense = expense.filter((t) => t.date?.startsWith(currentYear));
+  const sum = (arr: Transaction[]) => arr.reduce((acc, t) => acc + Number(t.amount || 0), 0);
+
+  return {
+    memberCount: store.members.length,
+    total: { income: sum(income), expense: sum(expense), balance: sum(income) - sum(expense) },
+    month: { income: sum(monthIncome), expense: sum(monthExpense), balance: sum(monthIncome) - sum(monthExpense) },
+    year: { income: sum(yearIncome), expense: sum(yearExpense), balance: sum(yearIncome) - sum(yearExpense) },
+    pendingPrayers: store.prayers.filter((p) => p.status === 'pending').length,
+  };
+};
+
+const buildBirthdays = (store: StaticStore): Birthday[] => {
+  const month = String(new Date().getMonth() + 1).padStart(2, '0');
+  return store.members
+    .filter((m) => m.birth_date && m.birth_date.slice(5, 7) === month && m.status === 'Ativo(a)')
+    .map((m) => ({ name: m.name, birth_date: m.birth_date }))
+    .sort((a, b) => a.birth_date.slice(8, 10).localeCompare(b.birth_date.slice(8, 10)));
+};
+
+const buildIncomeByCategory = (store: StaticStore): IncomeByCategory[] => {
+  const month = new Date().toISOString().slice(0, 7);
+  const totals = new Map<string, number>();
+  for (const tx of store.transactions) {
+    if (tx.type !== 'income' || !tx.date?.startsWith(month)) continue;
+    totals.set(tx.category, (totals.get(tx.category) || 0) + Number(tx.amount || 0));
+  }
+  return Array.from(totals.entries()).map(([category, total]) => ({ category, total }));
+};
+
+const buildBalanceSheet = (store: StaticStore, type: 'monthly' | 'yearly'): BalanceSheet[] => {
+  const bucket = new Map<string, { income: number; expense: number }>();
+  for (const tx of store.transactions) {
+    const key = type === 'yearly' ? String(tx.date || '').slice(0, 4) : String(tx.date || '').slice(0, 7);
+    if (!key) continue;
+    if (!bucket.has(key)) bucket.set(key, { income: 0, expense: 0 });
+    const cur = bucket.get(key)!;
+    if (tx.type === 'income') cur.income += Number(tx.amount || 0);
+    else cur.expense += Number(tx.amount || 0);
+  }
+  return Array.from(bucket.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([period, values]) => ({
+      period,
+      income: values.income,
+      expense: values.expense,
+      balance: values.income - values.expense,
+    }));
+};
+
+const staticApiFetch = async (path: string, init?: RequestInit): Promise<Response> => {
+  const store = getStaticStore();
+  const method = (init?.method || 'GET').toUpperCase();
+  const [pathname, queryString] = path.split('?');
+  const query = new URLSearchParams(queryString || '');
+
+  if (pathname === '/api/professions' && method === 'GET') return jsonResponse(store.professions);
+  if (pathname === '/api/skills' && method === 'GET') return jsonResponse(store.skills);
+  if (pathname === '/api/talents' && method === 'GET') return jsonResponse(store.talents);
+  if (pathname === '/api/churches' && method === 'GET') return jsonResponse(store.churches);
+
+  if (pathname === '/api/members' && method === 'GET') {
+    const data = store.members.map((m) => ({
+      ...m,
+      church_name: store.churches.find((c) => c.id === m.church_id)?.name || '',
+    }));
+    return jsonResponse(data);
+  }
+
+  if (pathname === '/api/members/birthdays' && method === 'GET') return jsonResponse(buildBirthdays(store));
+
+  if (pathname === '/api/members' && method === 'POST') {
+    const payload = JSON.parse(String(init?.body || '{}')) as Partial<Member>;
+    const id = store.members.reduce((max, m) => Math.max(max, m.id), 0) + 1;
+    const newMember: Member = {
+      id,
+      name: payload.name || 'Sem nome',
+      photo: payload.photo || '',
+      church_id: Number(payload.church_id || 1),
+      birth_date: payload.birth_date || '',
+      marital_status: payload.marital_status || 'Nao informou',
+      role: payload.role || 'Membro(a)',
+      ministry_leader: payload.ministry_leader || 'Nao ocupa cargo de Lideranca',
+      profession: payload.profession || '',
+      skill: payload.skill || '',
+      email: payload.email || '',
+      phone: payload.phone || '',
+      cpf: payload.cpf || '',
+      rg: payload.rg || '',
+      cep: payload.cep || '',
+      logradouro: payload.logradouro || '',
+      complement: payload.complement || '',
+      bairro: payload.bairro || '',
+      cidade: payload.cidade || '',
+      uf: payload.uf || '',
+      nr_imovel: payload.nr_imovel || '',
+      observation: payload.observation || '',
+      status: payload.status || 'Ativo(a)',
+      baptism_date: payload.baptism_date || '',
+      talents: payload.talents || '',
+    };
+    store.members.push(newMember);
+    setStaticStore(store);
+    return jsonResponse({ id });
+  }
+
+  if (pathname === '/api/members/import' && method === 'POST') {
+    const payload = JSON.parse(String(init?.body || '{}')) as { fileType: 'sql' | 'sqlite'; encoding: 'text' | 'base64'; content: string };
+    if (payload.fileType === 'sqlite') {
+      return jsonResponse({ error: 'No modo somente GitHub, importe apenas arquivos .sql.' }, 400);
+    }
+    if (payload.encoding !== 'text') {
+      return jsonResponse({ error: 'Formato invalido para importacao de SQL.' }, 400);
+    }
+    const result = importMembersFromSqlText(payload.content || '', store);
+    setStaticStore(store);
+    return jsonResponse({ ok: true, ...result });
+  }
+
+  if (pathname === '/api/upload' && method === 'POST') {
+    const payload = JSON.parse(String(init?.body || '{}')) as { image?: string };
+    return jsonResponse({ url: payload.image || '' });
+  }
+
+  if (pathname === '/api/events' && method === 'GET') return jsonResponse(store.events);
+
+  if (pathname === '/api/events' && method === 'POST') {
+    const payload = JSON.parse(String(init?.body || '{}')) as Partial<Event>;
+    const id = store.events.reduce((max, e) => Math.max(max, e.id), 0) + 1;
+    const event: Event = {
+      id,
+      title: payload.title || 'Novo Evento',
+      type: payload.type || 'Evento',
+      description: payload.description || '',
+      start_date: payload.start_date || new Date().toISOString(),
+      location: payload.location || '',
+    };
+    store.events.push(event);
+    setStaticStore(store);
+    return jsonResponse({ id });
+  }
+
+  if (pathname === '/api/prayer-requests' && method === 'GET') return jsonResponse(store.prayers);
+
+  if (pathname === '/api/transactions' && method === 'GET') {
+    const startDate = query.get('startDate');
+    const endDate = query.get('endDate');
+    const category = query.get('category');
+    const filtered = store.transactions.filter((t) => {
+      if (startDate && t.date < startDate) return false;
+      if (endDate && t.date > endDate) return false;
+      if (category && category !== 'all' && t.category !== category) return false;
+      return true;
+    });
+    return jsonResponse(filtered.sort((a, b) => b.date.localeCompare(a.date)));
+  }
+
+  if (pathname === '/api/transactions/categories' && method === 'GET') {
+    const categories = Array.from(new Set(store.transactions.map((t) => t.category).filter(Boolean)));
+    return jsonResponse(categories);
+  }
+
+  if (pathname === '/api/reports/balance-sheet' && method === 'GET') {
+    const type = (query.get('type') === 'yearly' ? 'yearly' : 'monthly') as 'monthly' | 'yearly';
+    return jsonResponse(buildBalanceSheet(store, type));
+  }
+
+  if (pathname === '/api/stats' && method === 'GET') return jsonResponse(buildStats(store));
+  if (pathname === '/api/stats/income-by-category' && method === 'GET') return jsonResponse(buildIncomeByCategory(store));
+
+  return jsonResponse({ error: `Rota nao implementada no modo estatico: ${method} ${pathname}` }, 404);
+};
+
 const apiFetch = (path: string, init?: RequestInit) => {
+  if (isStaticGithubMode()) {
+    return staticApiFetch(path, init);
+  }
   return fetch(`${API_BASE_URL}${path}`, init);
 };
 
@@ -619,8 +1076,8 @@ export default function App() {
       return;
     }
 
-    if (!API_BASE_URL && window.location.hostname.includes('github.io')) {
-      alert('API nao configurada. Defina VITE_API_BASE_URL nas variaveis do GitHub Actions e redeploy o frontend.');
+    if (!API_BASE_URL && window.location.hostname.includes('github.io') && !isSql) {
+      alert('No modo somente GitHub, a importacao via interface aceita apenas arquivo .sql.');
       e.target.value = '';
       return;
     }
